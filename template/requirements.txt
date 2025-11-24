@@ -5,3 +5,4 @@ altair
 openpyxl
 python-dotenv
 beautifulsoup4
+XlsxWriter
