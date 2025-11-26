@@ -2,7 +2,7 @@ import json
 import pandas as pd
 import mysql.connector
 from datetime import datetime
-from zoneinfo import ZoneInfo  # ✅ để set giờ Việt Nam
+from zoneinfo import ZoneInfo 
 import os, sys
 from dotenv import load_dotenv
 
