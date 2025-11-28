@@ -6,23 +6,25 @@ from zoneinfo import ZoneInfo
 import os, sys
 from dotenv import load_dotenv
 
-
+#Load biến môi trường trước
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
-from template.notification import send_error_email
 
 # Chạy gửi mail báo lỗi tại local
-env_path = os.path.join(os.path.dirname(__file__), '.env')
+#env_path = os.path.join(os.path.dirname(__file__), '.env')
+env_path = os.path.join(ROOT_DIR, 'template', '.env')
+print(env_path)
 load_dotenv(env_path)
+
+from config.config import cfg
+from template.notification import send_error_email
 
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
-# ===== Load cấu hình từ config.json =====
-with open("config/config.json", "r", encoding="utf-8") as f:
-    config_all = json.load(f)
+# ===== Load cấu hình từ config.py =====
 
-staging_cfg = config_all["staging"]
-control_cfg = config_all["control"]
+staging_cfg = cfg["staging"]
+control_cfg = cfg["control"]
 
 # DB Staging
 conn = mysql.connector.connect(**staging_cfg)

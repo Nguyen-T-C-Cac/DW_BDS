@@ -7,3 +7,7 @@ beautifulsoup4
 XlsxWriter
 python-dotenv
 
+
+sqlalchemy
+flask
+gunicorn

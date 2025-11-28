@@ -7,26 +7,36 @@ import re
 import os,sys
 from dotenv import load_dotenv
 
+#Load biến môi trường trước
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
-from template.notification import send_error_email
 
-#Chạy gửi mail báo lỗi tại local
-env_path = os.path.join(os.path.dirname(__file__), '.env')
+# Chạy gửi mail báo lỗi tại local
+#env_path = os.path.join(os.path.dirname(__file__), '.env')
+env_path = os.path.join(ROOT_DIR, 'template', '.env')
+print(env_path)
 load_dotenv(env_path)
 
-# ------------------ Load config.json ------------------
-with open("config/config.json", "r", encoding="utf-8") as f:
-    cfg = json.load(f)
+from config.config import cfg
+from template.notification import send_error_email
+
+
+# 1. Load config [input: file_id, config.json, .env, date (default= today)]
 
 staging_config = cfg["staging"]
 dw_config = cfg["datawarehouse"]
 ctl_config = cfg["control"]
 
-# CONNECT CONTROL DB
-# ===========================
-ctl_conn = mysql.connector.connect(**ctl_config)
-ctl_cursor = ctl_conn.cursor(dictionary=True)
+# 2. Kết nối db.estate_control
+try:
+    ctl_conn = mysql.connector.connect(**ctl_config)
+    ctl_cursor = ctl_conn.cursor(dictionary=True)
+
+    # Set Timezone Việt Nam cho MySQL
+    ctl_cursor.execute("SET time_zone = '+07:00';")
+except Exception as e:
+    send_error_email("CONNECT CONTROL DB FAILED", str(e))
+    raise  
 
 #Hàm viết log 
 def start_process(process_name, file_id):
@@ -59,7 +69,7 @@ def update_file_status(file_id, status):
     """, (status, file_id))
     ctl_conn.commit()
 
-#Lấy file có status 'TR' / 'LF'    
+#3. Kiểm tra record trong control.file_log có status 'TR' / 'LF'    
 ctl_cursor.execute("""
     SELECT * FROM file_log 
     WHERE status IN ('TR','LF') 
@@ -67,17 +77,23 @@ ctl_cursor.execute("""
     LIMIT 1
 """)
 file_item = ctl_cursor.fetchone()
+
 if not file_item:
     print("No file to load DW.")
+    ctl_cursor.close()
+    ctl_conn.close()
     exit()
 
 file_id = file_item["file_id"]
 print(f"Loading DW for file_id = {file_id}")
 # Bắt đầu ghi
+
+# 4. Thêm status=PS vào process_log
 process_id = start_process("Load to DW", file_id)
 
 try:
     # ------------------ LOAD FROM STAGING ------------------
+    # 5.Kết nối với db.estate_stagging và lấy dữ liệu toàn bộ dữ liệu sạch từ Property
     staging_conn = mysql.connector.connect(**staging_config)
     cursor = staging_conn.cursor(dictionary=True)
     cursor.execute("SELECT * FROM Property;")
@@ -87,9 +103,9 @@ try:
 
     print(f"Fetched {len(staging_data)} rows from staging DB.")
 
-    # ------------------ CONNECT TO DW ------------------
+    # 6.Kết nối với db.estate_dw
     dw_conn = mysql.connector.connect(**dw_config)
-    dw_cursor = dw_conn.cursor(dictionary=True)
+    dw_cursor = dw_conn.cursor(dictionary=True, buffered=True)
 
     # ------------------ Compare old vs new for SCD2 ------------------
     def has_changes(old, new):
@@ -117,6 +133,7 @@ try:
         description = row['description']
         street_width = row['street_width']
 
+        # 7. Xử lý dữ liệu trong các bảng Dimension
         # ------------------ DIM PropertyType ------------------
         property_type_name = row['property_type'] or "Unknown"
 
@@ -168,6 +185,7 @@ try:
                             (posting_date,))
             date_id = dw_cursor.lastrowid
 
+        # 8. Xử lý dữ liệu trong bảng fact
         # ------------------ FACT PropertyListing (SCD2) ------------------
         dw_cursor.execute("""
             SELECT * FROM PropertyListing
@@ -205,7 +223,7 @@ try:
         dw_cursor.execute("""
             UPDATE PropertyListing
             SET endDay = CURDATE(), isCurrent = 0
-            WHERE sk = %s
+            WHERE sk = %s 
         """, (old_record['sk'],))
 
         dw_cursor.execute("""
@@ -217,14 +235,14 @@ try:
         """, (key, url, create_date, name, price, area, bedrooms, floors,
             description, street_width, property_type_id, location_id, date_id))
 
-    # ------------------ Commit ------------------
+    # 9. Lưu toàn bộ thay đổi vào Data Warehouse và đóng kết nối db.estate_stagging db.estate_dw
     dw_conn.commit()
     dw_cursor.close()
     dw_conn.close()
 
     print("DW Load thành công — SCD2 cho FACT đã hoạt động đúng!")
-# LOG SUCCESS
-    # ==========================
+    
+    # 10. Cập nhật status="OK" cho file_log và status="SC" cho process_log và thông báo "DW load thành công"
     update_file_status(file_id, "OK")
     success_process(process_id)
 
@@ -233,6 +251,12 @@ except Exception as e:
     update_file_status(file_id, "LF")
     fail_process(process_id, str(e))
 
+    # ===== SEND EMAIL ERROR HERE =====
+    send_error_email(
+        "LOAD TO DW FAILED",
+        str(e)
+    )
+# 11. Đóng kết nối db.estate_control
 finally:
     ctl_cursor.close()
     ctl_conn.close()

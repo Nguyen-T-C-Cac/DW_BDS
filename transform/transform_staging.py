@@ -4,77 +4,77 @@ import re
 import os,sys
 from dotenv import load_dotenv
 
+#Load biến môi trường trước
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
-from template.notification import send_error_email
 
-#Chạy gửi mail báo lỗi tại local
-env_path = os.path.join(os.path.dirname(__file__), '.env')
+# Chạy gửi mail báo lỗi tại local
+#env_path = os.path.join(os.path.dirname(__file__), '.env')
+env_path = os.path.join(ROOT_DIR, 'template', '.env')
+print(env_path)
 load_dotenv(env_path)
 
-# ------------------ Load config.json ------------------
-with open("config/config.json", "r", encoding="utf-8") as f:
-    cfg = json.load(f)
+from config.config import cfg
+from template.notification import send_error_email
+
+# 1. Load config [input: config.py,.env, date (default= today)]
 
 staging_config = cfg["staging"]
 control_config = cfg["control"]
 
+# 2. Kết nối db.estate_control
+try:
+    control_conn = mysql.connector.connect(**control_config)
+    control_cursor = control_conn.cursor(dictionary=True)
+
+    # Set Timezone Việt Nam cho MySQL
+    control_cursor.execute("SET time_zone = '+07:00';")
+except Exception as e:
+    send_error_email("CONNECT CONTROL DB FAILED", str(e))
+    raise    
+
 #Hàm ghi log vào bảng process_log và file_log
 def start_process_log(process_name, file_id):
     """Insert log bắt đầu (PS)"""
-    conn = mysql.connector.connect(**control_config)
-    cursor = conn.cursor()
     sql = """
         INSERT INTO process_log (file_id, process_name, status, started_at)
         VALUES (%s, %s, 'PS', NOW())
     """
-    cursor.execute(sql, (file_id, process_name))
-    conn.commit()
-    process_id = cursor.lastrowid
-    cursor.close()
-    conn.close()
+    control_cursor.execute(sql, (file_id, process_name))
+    control_conn.commit()
+    process_id = control_cursor.lastrowid
+
     return process_id
 
 
 def success_process_log(process_id):
     """Cập nhật SC"""
-    conn = mysql.connector.connect(**control_config)
-    cursor = conn.cursor()
-    cursor.execute("""
+    control_cursor.execute("""
         UPDATE process_log 
         SET status='SC', updated_at=NOW()
         WHERE process_id=%s
     """, (process_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    control_conn.commit()
 
 
 def failed_process_log(process_id, error_msg):
     """Cập nhật FL"""
-    conn = mysql.connector.connect(**control_config)
-    cursor = conn.cursor()
-    cursor.execute("""
+    control_cursor.execute("""
         UPDATE process_log 
         SET status='FL', updated_at=NOW()
         WHERE process_id=%s
     """, (process_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    control_conn.commit()
 
 
 def update_file_log_status(file_id, status):
-    conn = mysql.connector.connect(**control_config)
-    cursor = conn.cursor()
-    cursor.execute("""
+    control_cursor.execute("""
         UPDATE file_log
         SET status=%s, updated_at=NOW()
         WHERE file_id=%s
     """, (status, file_id))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    control_conn.commit()
+   
 # ------------------ Hàm chuẩn hóa ------------------
 def parse_price(price_str):
     if not price_str:
@@ -110,21 +110,18 @@ def parse_int_from_str(value_str):
 
 
 # ------------------ RUN TRANSFORM ------------------
-# 
-def get_transform_file():
-    conn = mysql.connector.connect(**control_config)
-    cursor = conn.cursor(dictionary=True)
 
-    cursor.execute("""
+# 3. Kiểm tra record trong control.file_log có giá trị status= ST hoặc TF không
+def get_transform_file():
+  
+    control_cursor.execute("""
         SELECT * FROM file_log 
         WHERE status IN ('ST', 'TF')
         ORDER BY file_id ASC
         LIMIT 1;
     """)
 
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
+    row = control_cursor.fetchone()
     return row
 
 
@@ -132,20 +129,25 @@ file_info = get_transform_file()
 
 if not file_info:
     print("Không có file nào cần transform (ST/TF).")
+    control_cursor.close()
+    control_conn.close()
     exit()
 
 file_id = file_info["file_id"]
 print(f"Transforming file_id = {file_id}")
 
 # Ghi log bắt đầu
+# 4. Thêm status=PS vào process_log
 process_id = start_process_log("Transform Data", file_id)
 
+# Thực hiện transform
 try:
-    # Thực hiện transform
+    
+    # 5. Kết nối vối db.estate_stagging
     conn = mysql.connector.connect(**staging_config)
     cursor = conn.cursor(dictionary=True)
 
-    # Lấy dữ liệu gốc từ Property_Temp
+    # 6. Transfrom dữ liệu gốc từ bảng Property_temp
     cursor.execute("SELECT * FROM Property_Temp;")
     temp_rows = cursor.fetchall()
 
@@ -154,7 +156,7 @@ try:
     # Xóa bảng Property trước khi ghi dữ liệu mới
     cursor.execute("DELETE FROM Property;")
 
-    # Chuẩn bị insert
+    # 7. Thêm dữ liệu sạch vào bảng Property
     insert_sql = """
     INSERT IGNORE INTO Property (
         `key`, url, create_date, name, price, area, bedrooms, floors,
@@ -186,6 +188,8 @@ try:
             row["posting_date"]
         ))
         count += 1
+
+    # 9. Đóng kết nối và thông báo "Transform completed inserted into Property" 
     conn.commit()
     cursor.close()
     conn.close()
@@ -193,14 +197,25 @@ try:
     print(f"Transform completed → {count} rows inserted into Property")
 
 
-# ====== LOG SUCCESS ======
+# 8. Cập nhật status="TR" cho file_log và status="SC" cho process_log
     update_file_log_status(file_id, "TR")
     success_process_log(process_id)
 
+   
 except Exception as e:
     print("Transform Failed:", e)
 
     # ====== LOG FAILED ======
     update_file_log_status(file_id, "TF")
-    failed_process_log(process_id, str(e))    
+    failed_process_log(process_id, str(e)) 
+
+    # ===== SEND EMAIL ERROR HERE =====
+    send_error_email(
+        subject=f"TRANSFORM FAILED",
+        message=str(e)
+    )
+
+
+control_cursor.close()
+control_conn.close()
 
