@@ -7,7 +7,7 @@ import pandas as pd
 import mysql.connector
 import altair as alt
 import json
-import os
+import os,sys
 from dotenv import load_dotenv
 
 #Load biến môi trường trước
@@ -20,7 +20,7 @@ env_path = os.path.join(ROOT_DIR, 'template', '.env')
 print(env_path)
 load_dotenv(env_path)
 
-from config.config import config
+from config.config import cfg
 from template.notification import send_error_email
 
 
@@ -34,7 +34,7 @@ st.set_page_config(
 # Load Config
 try:
     
-    dm_cfg = config["datamart"]  # Sử dụng Data Mart
+    dm_cfg = cfg["datamart"]  # Sử dụng Data Mart
 except FileNotFoundError:
     st.error("Không tìm thấy file config/config.json. Vui lòng kiểm tra lại!")
     st.stop()
