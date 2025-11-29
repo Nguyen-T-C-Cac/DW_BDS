@@ -8,8 +8,21 @@ import mysql.connector
 import altair as alt
 import json
 import os
+from dotenv import load_dotenv
 
-from notification import send_error_email # Hàm gửi email cảnh báo lỗi
+#Load biến môi trường trước
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(ROOT_DIR)
+
+# Chạy gửi mail báo lỗi tại local
+#env_path = os.path.join(os.path.dirname(__file__), '.env')
+env_path = os.path.join(ROOT_DIR, 'template', '.env')
+print(env_path)
+load_dotenv(env_path)
+
+from config.config import config
+from template.notification import send_error_email
+
 
 # ======================= 1. CONFIGURATION =======================
 st.set_page_config(
@@ -20,12 +33,6 @@ st.set_page_config(
 
 # Load Config
 try:
-    PROJECT_ROOT = os.path.dirname(os.path.realpath(__file__))
-    config_path = os.path.join(PROJECT_ROOT, "..", "config", "config.json")
-    config_path = os.path.abspath(config_path)
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
     
     dm_cfg = config["datamart"]  # Sử dụng Data Mart
 except FileNotFoundError:
@@ -44,9 +51,6 @@ def query_dm(sql, params=None):
         st.error(f"Lỗi query Data Mart: {e}")
         return pd.DataFrame()
 
-#Chạy gửi mail báo lỗi tại local
-env_path = os.path.join(os.path.dirname(__file__), '.env')
-load_dotenv(env_path)
 
 # Helper function để chạy script Python và hiện log
 def run_etl_script(script_path, description):
